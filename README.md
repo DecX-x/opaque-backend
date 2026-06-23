@@ -1,192 +1,86 @@
-# iApp hello-world
+# iExec TEE Orderbook Matcher (Opaque Backend)
 
-This project is an iExec Decentralized Confidential Computing serverless
-application leveraging Trusted Execution Environment (TEE).
+This project is a Decentralized Confidential Computing serverless application running on the iExec platform. It leverages a Trusted Execution Environment (TEE) to confidentially process trading orders, match them, and cryptographically sign the resulting trades.
 
-This project was scaffolded with `iapp init`.
+## Overview
 
-- [Quick start](#quick-start)
-  - [Prerequisites](#prerequisites)
-  - [`iapp` main commands](#iapp-main-commands)
-  - [Develop](#develop)
-  - [Test locally](#test-locally)
-  - [Deploy on iExec](#deploy-on-iexec)
-  - [Run on iExec](#run-on-iexec)
-- [Project overview](#project-overview)
-- [iApp development guidelines](#iapp-development-guidelines)
-  - [iApp inputs](#iapp-inputs)
-  - [iApp outputs](#iapp-outputs)
-  - [working with libraries](#working-with-libraries)
+The `Opaque Backend` acts as a secure, off-chain order matching engine. By running inside a TEE (like Intel SGX), the application guarantees that order contents (e.g., protected datasets) remain confidential and that the matching execution cannot be tampered with.
 
-## Quick start
+The application performs the following main tasks:
+1. **Initializes a TEE Wallet**: Uses an app developer secret to instantiate an Ethereum wallet that will sign the matched trades.
+2. **Loads Orders**: Reads orders from iExec protected datasets (using `@iexec/dataprotector-deserializer`) or from command-line arguments for mock testing.
+3. **Matches Orders**: Implements a matching algorithm to pair compatible maker and taker orders (e.g., swapping WETH for USDC).
+4. **Signs Results**: Encodes the matched trades into an Ethereum ABI format and signs the hash using the TEE wallet.
+5. **Outputs Results**: Writes the matched trades, the TEE signature, and the signer's address to `result.json`.
 
-### Prerequisites
+## Prerequisites
 
+- Node.js environment
 - `iapp` CLI installed locally
-- `docker` installed locally
-- [dockerhub](https://hub.docker.com/) account
-- ethereum wallet
+- Docker installed locally
+- An Ethereum wallet
+- An iExec account
 
-### `iapp` main commands
+## Application Inputs
 
-- [`iapp init`](#develop)
-- [`iapp test`](#test-locally)
-- [`iapp deploy`](#deploy-on-iexec)
+### 1. Application Secret (App Developer Secret)
+The application requires an Ethereum private key to act as the TEE signer.
+- **Environment Variable**: `IEXEC_APP_DEVELOPER_SECRET`
+- This is injected securely at runtime by the iExec TEE infrastructure.
 
-### Develop
+### 2. Protected Datasets (Orders)
+Users' orders are provided as protected datasets.
+- **`IEXEC_BULK_SLICE_SIZE`**: The number of protected datasets to process.
+- **`IEXEC_DATASET_{i}_FILENAME`**: The filename for each dataset.
+- Order format (JSON): `{ "id": "1", "owner": "0x...", "tokenBuy": "0x...", "tokenSell": "0x...", "amountBuy": "...", "amountSell": "..." }`
 
-`iapp init` scaffolds a ready to hack iApp template.
+### 3. Mock Orders (Testing)
+If no protected datasets are provided, the app will fall back to reading JSON string arguments passed via `process.argv`.
 
-Start hacking by editing the source code in [./src](./src/).
+## Application Outputs
 
-See [iApp development guidelines](#iapp-development-guidelines) for more details
-on the iApp development framework.
+The application produces standard iExec output files in the `IEXEC_OUT` directory:
 
-### Test locally
+1. **`result.json`** (Deterministic Output):
+   - `trades`: Array of matched trade objects.
+   - `signature`: ECDSA signature of the ABI-encoded trades.
+   - `signer`: The public address of the TEE wallet.
+2. **`computed.json`**: Points to `result.json` as the deterministic output path.
+3. **`error.txt`**: Created only if an execution error occurs.
 
-Use the `iapp test` command to run your app locally and check your app fulfills
-the framework's [requirements for outputs](#iapp-outputs).
+## Trade Struct (Smart Contract Integration)
 
-```sh
-iapp test
+The application constructs and signs a `Trade` tuple compatible with standard Solidity contracts:
+```solidity
+struct Trade {
+    address buyer;
+    address seller;
+    address tokenBuy;
+    address tokenSell;
+    uint256 amountBuy;
+    uint256 amountSell;
+    uint256 nonce;
+}
 ```
 
-> ℹ️ Use the following **options** with `iapp test` to simulate
-> [inputs](#iapp-inputs):
->
-> - `--args <args>` simulates the app invocation with public input
->   [args](https://protocol.docs.iex.ec/for-developers/technical-references/application-io#args).
-> - `--inputFile <url>` simulates the app invocation with public
->   [input files](https://protocol.docs.iex.ec/for-developers/technical-references/application-io#input-files).
-> - `--requesterSecret <index=value>` simulates the app invocation with
->   [requester secrets](https://protocol.docs.iex.ec/for-developers/technical-references/application-io#requester-secrets).
-> - `--protectedData [mock name]` simulates the app invocation with a secret
->   [protected data](https://protocol.docs.iex.ec/for-developers/technical-references/application-iohttps://protocol.docs.iex.ec/for-developers/technical-references/application-io#protected-data).
-> - if your app uses an
->   [app secret](https://protocol.docs.iex.ec/for-developers/technical-references/application-io#app-developer-secret),
->   `iapp test` will prompt you to set the app secret and simulate the run of
->   the app with it. You can choose to save the secret for further reuse by
->   `iapp test` and `iapp deploy`.
+## Running the Application Locally
 
-Check the test output in the [output](./output/) directory.
+1. **Install dependencies**:
+   ```sh
+   npm install
+   ```
 
-> ℹ️ Files used by the app while running `iapp test` are located in the
-> [input](./input/) directory.
+2. **Run via iApp CLI**:
+   ```sh
+   iapp test --args '{"id":"1","owner":"0x123","tokenBuy":"WETH","tokenSell":"USDC","amountBuy":"1","amountSell":"2000"}' '{"id":"2","owner":"0x456","tokenBuy":"USDC","tokenSell":"WETH","amountBuy":"2000","amountSell":"1"}'
+   ```
+   *Note: `iapp test` will prompt you to provide the App Developer Secret (`IEXEC_APP_DEVELOPER_SECRET`).*
 
-### Deploy on iExec
+## Deployment
 
-Use the `iapp deploy` command to transform your app into a TEE app and deploy it
-on the iExec decentralized platform.
+Deploy this application to the iExec network to run it within an SGX enclave:
 
 ```sh
 iapp deploy
 ```
-
-> ℹ️ for apps using an
-> [app secret](https://protocol.docs.iex.ec/for-developers/technical-references/application-io#app-developer-secret)
->
-> The app secret is provisioned once, at the app deployment time. If an app
-> secret was already provided to `iapp test` and saved in
-> [iapp.config.json](./iapp.config.json), `iapp deploy` will reuse this secret.
-
-### Run on iExec
-
-Use the `run` command to run a deployed app on the iExec decentralized platform.
-
-```sh
-iapp run <iapp-address>
-```
-
-> ℹ️ Use the following **options** with `iapp run` to inject inputs:
->
-> - `--args <args>` run the app with public input
->   [args](https://protocol.docs.iex.ec/for-developers/technical-references/application-io#args)
-> - `--inputFile <url>` run the app with public
->   [input files](https://protocol.docs.iex.ec/for-developers/technical-references/application-io#input-files)
-> - `--requesterSecret <index=value>` run the app with
->   [requester secrets](https://protocol.docs.iex.ec/for-developers/technical-references/application-io#requester-secrets)
-> - `--protectedData <protected-data-address>` run the app with a secret
->   [protected data](https://protocol.docs.iex.ec/for-developers/technical-references/application-io#protected-data)
-
-## Project overview
-
-- [iapp.config.json](./iapp.config.json) configuration file for the `iapp`
-  commands (⚠️ this file contains sensitive information such as credentials or
-  wallet and should never be committed in a public repository).
-- [src/](./src/) where your code lives when you [develop](#develop) your app.
-- [Dockerfile](./Dockerfile) how to build your app docker image.
-- [input/](./input/) input directory for your [local tests](#test-locally).
-- [output/](./output/) output directory for your [local tests](#test-locally).
-- [cache/](./cache/) directory contains traces of your past app
-  [deployments](#deploy-on-iexec) and [runs](#run-on-iexec).
-
-## iApp development guidelines
-
-iApps are serverless Decentralized Confidential Computing applications running
-on iExec's decentralized workers. This framework gives the guidelines to build
-such an application.
-
-### iApp inputs
-
-iApps can process different kind of inputs:
-
-- Requester inputs:
-
-  - public
-    [args](https://protocol.docs.iex.ec/for-developers/technical-references/application-io#args)
-  - public
-    [input files](https://protocol.docs.iex.ec/for-developers/technical-references/application-io#input-files)
-  - [requester secrets](https://protocol.docs.iex.ec/for-developers/technical-references/application-io#requester-secrets)
-
-- App developer inputs
-
-  - [app secret](https://protocol.docs.iex.ec/for-developers/technical-references/application-io#app-developer-secret)
-
-- Third party inputs:
-
-  - secret
-    [protected data](https://protocol.docs.iex.ec/for-developers/technical-references/application-io#protected-data)
-
-### iApp outputs
-
-iApp's must write
-[output](https://protocol.docs.iex.ec/for-developers/technical-references/application-io#application-outputs)
-files in the `IEXEC_OUT` (`/iexec_out/`) directory.
-
-Each iApp run must produce a specific [`computed.json`](#computedjson) file.
-
-> ⚠️ **Output size limitation:**  
-> The results uploaded by the worker must not exceed **50 MB**.  
-> If the size exceeds this limit, the task will fail with the error
-> `POST_COMPUTE_FAILED_UNKNOWN_ISSUE`.  
-> Ensure your iApp generates outputs within this limit during testing.
-
-#### `computed.json`
-
-The `computed.json` file is a JSON file referencing a deterministic result in
-the `IEXEC_OUT` directory (any iApp run with the same inputs should create the
-same deterministic result).
-
-```json
-{
-  "deterministic-output-path": "iexec_out/path/to/deterministic/result"
-}
-```
-
-> ℹ️ Only files referenced in `deterministic-output-path` must be deterministic,
-> other files produced in the `IEXEC_OUT` directory can be non-deterministic.
-
-### working with libraries
-
-iApp can use libraries as soon as these libraries are installed while building
-the project's [`Dockerfile`](./Dockerfile).
-
-> ℹ️ **Limitation**
->
-> Transforming an app into a TEE application requires a base image (image
-> `FROM`) compatible with the transformation. Currently only a small set of base
-> images are available.
->
-> - make sure installed libraries can run within the base image
-> - do not try to replace the base image in the Dockerfile, this would lead to
->   failing TEE transformation.
+*The app secret is provisioned at deployment time.*
